@@ -25,7 +25,7 @@ def set_proc_lock(proc_lock_sub):
     global proc_lock
     proc_lock = proc_lock_sub
 
-def pushNewFetch(fetcher_name, protocol, ip, port):
+def pushNewFetch(fetch_list):
     """
     爬取器新抓到了一个代理，调用本函数将代理放入数据库
     fetcher_name : 爬取器名称
@@ -33,26 +33,21 @@ def pushNewFetch(fetcher_name, protocol, ip, port):
     ip : 代理IP地址
     port : 代理端口
     """
-    p = Proxy()
-    p.fetcher_name = fetcher_name
-    p.protocol = protocol
-    p.ip = ip
-    p.port = port
     conn_lock.acquire()
     proc_lock.acquire()
 
     c = conn.cursor()
     c.execute('BEGIN EXCLUSIVE TRANSACTION;')
-    # 更新proxies表
-    c.execute('SELECT * FROM proxies WHERE protocol=? AND ip=? AND port=?', (p.protocol, p.ip, p.port))
-    row = c.fetchone()
-    if row is not None: # 已经存在(protocol, ip, port)
-        old_p = Proxy.decode(row)
-        c.execute("""
-            UPDATE proxies SET fetcher_name=?,to_validate_date=? WHERE protocol=? AND ip=? AND port=?
-        """, (p.fetcher_name, min(datetime.datetime.now(), old_p.to_validate_date), p.protocol, p.ip, p.port))
-    else:
-        c.execute('INSERT INTO proxies VALUES (?,?,?,?,?,?,?,?,?)', p.params())
+
+    for fetch_item in fetch_list:
+        fetcher_name, protocol, ip, port = fetch_item
+        p = Proxy()
+        p.fetcher_name = fetcher_name
+        p.protocol = protocol
+        p.ip = ip
+        p.port = port
+        c.execute('INSERT OR IGNORE INTO proxies VALUES (?,?,?,?,?,?,?,?,?)', p.params())
+
     c.close()
     conn.commit()
     conn_lock.release()
@@ -69,46 +64,41 @@ def getToValidate(max_count=1):
     proc_lock.acquire()
     c = conn.cursor()
     c.execute('BEGIN EXCLUSIVE TRANSACTION;')
-    c.execute('SELECT * FROM proxies WHERE to_validate_date<=? AND validated=? ORDER BY to_validate_date LIMIT ?', (
+    c.execute('SELECT * FROM proxies WHERE to_validate_date<=? ORDER BY validated DESC, to_validate_date LIMIT ?', (
         datetime.datetime.now(),
-        True,
         max_count
     ))
     proxies = [Proxy.decode(row) for row in c]
-    c.execute('SELECT * FROM proxies WHERE to_validate_date<=? AND validated=? ORDER BY to_validate_date LIMIT ?', (
-        datetime.datetime.now(),
-        False,
-        max_count - len(proxies)
-    ))
-    proxies = proxies + [Proxy.decode(row) for row in c]
     c.close()
     conn.commit()
     conn_lock.release()
     proc_lock.release()
     return proxies
 
-def pushValidateResult(proxy, success, latency):
+def pushValidateResult(result_list):
     """
     将验证器的一个结果添加进数据库中
     proxy : 代理
     success : True/False，验证是否成功
     latency : 本次验证所用的时间(单位毫秒)
     """
-    p = proxy
-    should_remove = p.validate(success, latency)
     conn_lock.acquire()
     proc_lock.acquire()
-    if should_remove:
-        conn.execute('DELETE FROM proxies WHERE protocol=? AND ip=? AND port=?', (p.protocol, p.ip, p.port))
-    else:
-        conn.execute("""
-            UPDATE proxies
-            SET fetcher_name=?,validated=?,latency=?,validate_date=?,to_validate_date=?,validate_failed_cnt=?
-            WHERE protocol=? AND ip=? AND port=?
-        """, (
-            p.fetcher_name, p.validated, p.latency, p.validate_date, p.to_validate_date, p.validate_failed_cnt,
-            p.protocol, p.ip, p.port
-        ))
+    conn.execute('BEGIN EXCLUSIVE TRANSACTION;')
+    for result_item in result_list:
+        p, success, latency = result_item
+        should_remove = p.validate(success, latency)
+        if should_remove:
+            conn.execute('DELETE FROM proxies WHERE protocol=? AND ip=? AND port=?', (p.protocol, p.ip, p.port))
+        else:
+            conn.execute("""
+                UPDATE proxies
+                SET fetcher_name=?,validated=?,latency=?,validate_date=?,to_validate_date=?,validate_failed_cnt=?
+                WHERE protocol=? AND ip=? AND port=?
+            """, (
+                p.fetcher_name, p.validated, p.latency, p.validate_date, p.to_validate_date, p.validate_failed_cnt,
+                p.protocol, p.ip, p.port
+            ))
     conn.commit()
     conn_lock.release()
     proc_lock.release()

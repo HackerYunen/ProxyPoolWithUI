@@ -14,3 +14,5 @@ urllib3==1.26.3
 Werkzeug==1.0.1
 PySocks==1.7.1
 func-timeout==4.3.5
+aiohttp==3.8.1
+aiohttp_socks=0.7.1

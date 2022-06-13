@@ -3,20 +3,15 @@
 验证器逻辑
 """
 
-import sys
-import socket
-import threading
-from queue import Queue
-import logging
+import asyncio
 import time
-import requests
-from func_timeout import func_set_timeout
-from func_timeout.exceptions import FunctionTimedOut
 from db import conn
-from config import PROC_VALIDATOR_SLEEP, VALIDATE_THREAD_NUM
-from config import VALIDATE_METHOD, VALIDATE_KEYWORD, VALIDATE_HEADER, VALIDATE_URL, VALIDATE_TIMEOUT, VALIDATE_MAX_FAILS
+from config import *
+import aiohttp
+from aiohttp_socks import ProxyConnector
 
-logging.basicConfig(stream=sys.stdout, format="%(asctime)s-%(levelname)s:%(name)s:%(message)s", level='INFO')
+loop = asyncio.get_event_loop()
+
 
 def main(proc_lock):
     """
@@ -28,32 +23,37 @@ def main(proc_lock):
         从数据库中获取若干当前待验证的代理
         将代理发送给前面创建的线程
     """
-    logger = logging.getLogger('validator')
     conn.set_proc_lock(proc_lock)
 
-    in_que = Queue()
-    out_que = Queue()
-    running_proxies = set() # 储存哪些代理正在运行，以字符串的形式储存
+    in_que = asyncio.Queue()
+    out_que = asyncio.Queue()
 
-    threads = []
+    tasks = []
     for _ in range(VALIDATE_THREAD_NUM):
-        threads.append(threading.Thread(target=validate_thread, args=(in_que, out_que)))
-    [_.start() for _ in threads]
+        func = validate_thread(in_que, out_que)
+        tasks.append(asyncio.ensure_future(func))
+    tasks.append(asyncio.ensure_future(get_new_proxy(in_que, out_que)))
+    loop.run_until_complete(asyncio.wait(tasks))
 
+
+async def get_new_proxy(in_que: asyncio.Queue, out_que: asyncio.Queue):
+    running_proxies = set()  # 储存哪些代理正在运行，以字符串的形式储存
     while True:
         out_cnt = 0
+        result_list = []
         while not out_que.empty():
-            proxy, success, latency = out_que.get()
-            conn.pushValidateResult(proxy, success, latency)
+            proxy, success, latency = await out_que.get()
+            result_list.append([proxy, success, latency])
             uri = f'{proxy.protocol}://{proxy.ip}:{proxy.port}'
             running_proxies.remove(uri)
             out_cnt = out_cnt + 1
         if out_cnt > 0:
-            logger.info(f'完成了{out_cnt}个代理的验证')
+            conn.pushValidateResult(result_list)
+            print(f'完成了{out_cnt}个代理的验证')
 
-        # 如果正在进行验证的代理足够多，那么就不着急添加新代理        
+        # 如果正在进行验证的代理足够多，那么就不着急添加新代理
         if len(running_proxies) >= VALIDATE_THREAD_NUM * 2:
-            time.sleep(PROC_VALIDATOR_SLEEP)
+            await asyncio.sleep(PROC_VALIDATOR_SLEEP)
             continue
 
         # 找一些新的待验证的代理放入队列中
@@ -63,36 +63,32 @@ def main(proc_lock):
             # 这里找出的代理有可能是正在进行验证的代理，要避免重复加入
             if uri not in running_proxies:
                 running_proxies.add(uri)
-                in_que.put(proxy)
+                await in_que.put(proxy)
                 added_cnt += 1
-        
-        if added_cnt == 0:
-            time.sleep(PROC_VALIDATOR_SLEEP)
 
-@func_set_timeout(VALIDATE_TIMEOUT * 2)
-def validate_once(proxy):
+        if added_cnt == 0:
+            await asyncio.sleep(PROC_VALIDATOR_SLEEP)
+
+
+async def validate_once(proxy: conn.Proxy):
     """
     进行一次验证，如果验证成功则返回True，否则返回False或者是异常
     """
-    proxies = {
-        'http': f'{proxy.protocol}://{proxy.ip}:{proxy.port}',
-        'https': f'{proxy.protocol}://{proxy.ip}:{proxy.port}'
-    }
-    if VALIDATE_METHOD == "GET":
-        r = requests.get(VALIDATE_URL, timeout=VALIDATE_TIMEOUT, proxies=proxies)
-        r.encoding = "utf-8"
-        html = r.text
-        if VALIDATE_KEYWORD in html:
-            return True
-        return False
-    else:
-        r = requests.get(VALIDATE_URL, timeout=VALIDATE_TIMEOUT, proxies=proxies, allow_redirects=False)
-        resp_headers = r.headers
-        if VALIDATE_HEADER in resp_headers.keys() and VALIDATE_KEYWORD in resp_headers[VALIDATE_HEADER]:
-            return True
-        return False
+    connector = ProxyConnector.from_url(f'{proxy.protocol}://{proxy.ip}:{proxy.port}')
+    timeout = aiohttp.ClientTimeout(total=VALIDATE_TIMEOUT)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with session.get(VALIDATE_URL, allow_redirects=False) as response:
+            if VALIDATE_METHOD == "GET":
+                if VALIDATE_KEYWORD in await response.text():
+                    return True
+                return False
+            else:
+                if VALIDATE_HEADER in response.headers and VALIDATE_KEYWORD in response.headers[VALIDATE_HEADER]:
+                    return True
+                return False
 
-def validate_thread(in_que, out_que):
+
+async def validate_thread(in_que: asyncio.Queue, out_que: asyncio.Queue):
     """
     验证函数，这个函数会在一个线程中被调用
     in_que: 输入队列，用于接收验证任务
@@ -101,21 +97,18 @@ def validate_thread(in_que, out_que):
     """
 
     while True:
-        proxy = in_que.get()
-
+        proxy = await in_que.get()
         success = False
         latency = None
         for _ in range(VALIDATE_MAX_FAILS):
             try:
                 start_time = time.time()
-                if validate_once(proxy):
+                if await validate_once(proxy):
                     end_time = time.time()
-                    latency = int((end_time-start_time)*1000)
+                    latency = int((end_time - start_time) * 1000)
                     success = True
                     break
             except Exception as e:
                 pass
-            except FunctionTimedOut:
-                pass
 
-        out_que.put((proxy, success, latency))
+        await out_que.put((proxy, success, latency))
