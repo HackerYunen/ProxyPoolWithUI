@@ -6,6 +6,7 @@ from .Fetcher import Fetcher
 from fetchers import fetchers
 import sqlite3
 
+
 def init():
     """
     初始化数据库
@@ -17,7 +18,7 @@ def init():
     for sql in create_tables:
         conn.execute(sql)
         conn.commit()
-    
+
     # 注册所有的爬取器
     c = conn.cursor()
     c.execute('BEGIN EXCLUSIVE TRANSACTION;')
@@ -29,5 +30,5 @@ def init():
             c.execute('INSERT INTO fetchers VALUES(?,?,?,?,?)', f.params())
     c.close()
     conn.commit()
-    
+
     conn.close()

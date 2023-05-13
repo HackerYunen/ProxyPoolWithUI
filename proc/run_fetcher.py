@@ -3,7 +3,6 @@
 定时运行爬取器
 """
 
-import sys
 import threading
 from queue import Queue
 import time
@@ -12,6 +11,7 @@ from fetchers import fetchers
 from config import PROC_FETCHER_SLEEP
 from func_timeout import func_set_timeout
 from func_timeout.exceptions import FunctionTimedOut
+
 
 def main(proc_lock):
     """
@@ -35,7 +35,7 @@ def main(proc_lock):
             time.sleep(PROC_FETCHER_SLEEP)
             continue
 
-        @func_set_timeout(30)
+        @func_set_timeout(300)
         def fetch_worker(fetcher):
             f = fetcher()
             proxies = f.fetch()
@@ -76,6 +76,6 @@ def main(proc_lock):
                 fetch_list.append([fetcher_name, proxy[0], proxy[1], proxy[2]])
             conn.pushNewFetch(fetch_list)
             conn.pushFetcherResult(fetcher_name, len(proxies))
-        
+
         print(f'完成运行{len(threads)}个爬取器，睡眠{PROC_FETCHER_SLEEP}秒')
         time.sleep(PROC_FETCHER_SLEEP)

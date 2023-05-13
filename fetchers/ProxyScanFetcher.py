@@ -2,7 +2,8 @@ from .BaseFetcher import BaseFetcher
 import requests
 import time
 
-class ProxyscanFetcher(BaseFetcher):
+
+class ProxyScanFetcher(BaseFetcher):
     """
     https://www.proxyscan.io/api/proxy?last_check=9800&uptime=50&limit=20&_t={{ timestamp }}
     """
@@ -14,11 +15,13 @@ class ProxyscanFetcher(BaseFetcher):
         """
         proxies = []
         # 此API为随机获取接口，获取策略为：重复取十次后去重
-        for _ in range(10):
-            url = "https://www.proxyscan.io/api/proxy?last_check=9800&uptime=50&limit=20&_t=" + str(time.time())
-            resp = requests.get(url).json()
-            for data in resp:
-                protocol = str.lower(data['Type'][0])
-                proxies.append((protocol, data['Ip'], data['Port']))
-        
+        for protocol in ['http', 'https', 'socks4', 'socks5']:
+            url = f"https://www.proxyscan.io/download?type={protocol}&_t={time.time()}"
+            resp = requests.get(url).text
+            for data in resp.split("\n"):
+                if data == "":
+                    continue
+                [ip, port] = data.split(":")
+                proxies.append((protocol, ip, port))
+
         return list(set(proxies))

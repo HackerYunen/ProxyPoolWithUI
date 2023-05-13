@@ -1,8 +1,10 @@
 # encoding: utf-8
 
-import sys,os
+import sys, os
+
 sys.path.append(os.path.dirname(__file__) + os.sep + '../')
 from db import conn
+
 
 def run():
     assert len(conn.getToValidate(10)) == 0
@@ -20,17 +22,17 @@ def run():
     assert proxies[2].ip == '127.0.0.3'
     assert proxies[3].ip == '127.0.0.4'
 
-    p = conn.getToValidate(1)[0] # 设置一个代理通过验证
+    p = conn.getToValidate(1)[0]  # 设置一个代理通过验证
     conn.pushValidateResult(p, True)
     assert len(conn.getToValidate(10)) == 3
-    p = conn.getToValidate(1)[0] # 设置一个代理没有通过验证
+    p = conn.getToValidate(1)[0]  # 设置一个代理没有通过验证
     conn.pushValidateResult(p, False)
     assert len(conn.getToValidate(10)) == 2
     assert len(conn.getValidatedRandom(1)) == 1
     assert len(conn.getValidatedRandom(-1)) == 1
     p = conn.getValidatedRandom(1)[0]
     assert p.ip == '127.0.0.1'
-    p = conn.getToValidate(1)[0] # 设置一个代理通过验证
+    p = conn.getToValidate(1)[0]  # 设置一个代理通过验证
     conn.pushValidateResult(p, True)
     assert len(conn.getValidatedRandom(1)) == 1
     assert len(conn.getValidatedRandom(-1)) == 2
@@ -65,6 +67,7 @@ def run():
     assert f.sum_proxies_cnt == 0
     assert f.last_proxies_cnt == 0
     assert f.last_fetch_date is None
+
 
 if __name__ == '__main__':
     print(u'请确保运行本脚本之前删除或备份`data.db`文件')
